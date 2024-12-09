@@ -50,8 +50,8 @@ def evaluate_model_ui():
     try:
         # Load processed data
         df = pd.read_csv(data_path)
-        X = df.drop(columns=['churn'])
-        y = df['churn']
+        X = df.drop(columns=['Churn'])
+        y = df['Churn']
 
         evaluate_model(model_path, X, y)
     except Exception as e:
