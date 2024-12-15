@@ -1,97 +1,83 @@
 import os
-import pickle
 import pandas as pd
-from src.data_preprocessing import preprocess_data
-from src.train_model import train_and_save_model
-from src.evaluate_model import evaluate_model
+import joblib
+from preprocessing.data_cleaning import clean_data
+from preprocessing.feature_engineering import encode_features, scale_features
+from utils.oversampling import balance_classes
+from train.model_training import train_random_forest
+from train.model_evaluation import evaluate_model
 
-def main_menu():
-    print("\nWelcome to the Churn Prediction Project")
-    print("=======================================")
-    print("1. Train Model")
-    print("2. Evaluate Model")
-    print("3. Predict Churn")
-    print("4. Exit")
+# Paths for model and scaler
+MODEL_PATH = './models/customer_churn_model.pkl'
+SCALER_PATH = './models/scaler.pkl'
 
-    choice = input("Enter your choice (1-4): ")
-    if choice == '1':
-        train_model_ui()
-    elif choice == '2':
-        evaluate_model_ui()
-    elif choice == '3':
-        predict_churn_ui()
-    elif choice == '4':
-        print("Goodbye!")
-        exit()
-    else:
-        print("Invalid choice. Please try again.")
-        main_menu()
+# Load the data
+data = pd.read_csv('./data/telecom_data.csv')
+print("Dataset Loaded Successfully!")
 
-def train_model_ui():
-    print("\n==== Train Model ====")
-    data_path = input("Enter the path to the raw dataset (e.g., data/raw/churn_data.csv): ")
-    model_path = 'model/churn_model.pkl'
-    columns_path = 'model/columns.json'
+# Preprocess data
+data = clean_data(data)
+data, label_encoder = encode_features(data)
 
-    try:
-        train_and_save_model(data_path, model_path, columns_path)
-        print(f"Model trained and saved to {model_path}.")
-        print(f"Column metadata saved to {columns_path}.")
-    except Exception as e:
-        print(f"Error during training: {e}")
+# Split data into train-test sets
+from sklearn.model_selection import train_test_split
+X = data.drop('Churn', axis=1)
+y = data['Churn']
+
+if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
+    # Load the model and scaler
+    rf_model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    print("Model and Scaler loaded successfully!")
+
+    # Scale the features
+    numerical_cols = X.select_dtypes(include=['float64', 'int64']).columns
+    X, _ = scale_features(X, numerical_cols, scaler=scaler)
+
+    # Predict using the loaded model
+    y_pred = rf_model.predict(X)
+    y_pred_proba = rf_model.predict_proba(X)[:, 1]
+
+    # Show prediction results
+    churn_count = sum(y_pred)
+    non_churn_count = len(y_pred) - churn_count
+    print(f"\nTotal Records: {len(y_pred)}")
+    print(f"Predicted Churn: {churn_count}")
+    print(f"Predicted Non-Churn: {non_churn_count}")
+
+    # Display a sample of predictions
+    results = pd.DataFrame({
+        'Churn (Actual)': y,
+        'Churn (Predicted)': y_pred,
+        'Churn Probability': y_pred_proba
+    })
+    print("\nSample Predictions:")
+    print(results.head(10))
+
+else:
+    print("Model and Scaler not found. Proceeding with training...")
     
-    main_menu()
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
 
-def evaluate_model_ui():
-    print("\n==== Evaluate Model ====")
-    model_path = 'model/churn_model.pkl'
-    data_path = input("Enter the path to the processed dataset (e.g., data/processed/churn_data_processed.csv): ")
+    # Balance classes
+    X_train, y_train = balance_classes(X_train, y_train)
 
-    try:
-        # Load processed data
-        df = pd.read_csv(data_path)
-        X = df.drop(columns=['Churn'])
-        y = df['Churn']
+    # Scale numerical features
+    numerical_cols = X_train.select_dtypes(include=['float64', 'int64']).columns
+    X_train, scaler = scale_features(X_train, numerical_cols)
+    X_test, _ = scale_features(X_test, numerical_cols, scaler=scaler)
 
-        evaluate_model(model_path, X, y)
-    except Exception as e:
-        print(f"Error during evaluation: {e}")
-    
-    main_menu()
+    # Train model and save both model and scaler
+    rf_model = train_random_forest(X_train, y_train, MODEL_PATH, SCALER_PATH, scaler=scaler)
 
-def predict_churn_ui():
-    print("\n==== Predict Churn ====")
-    model_path = 'model/churn_model.pkl'
-    columns_path = 'model/columns.json'
-
-    # Load model and columns
-    try:
-        with open(model_path, 'rb') as file:
-            model = pickle.load(file)
-        with open(columns_path, 'r') as file:
-            columns = pd.read_json(file)['data_columns'].tolist()
-    except Exception as e:
-        print(f"Error loading model or columns: {e}")
-        main_menu()
-
-    # Input data for prediction
-    print("\nEnter customer details for churn prediction:")
-    user_input = {}
-    for column in columns:
-        value = input(f"{column}: ")
-        user_input[column] = float(value) if value.replace('.', '', 1).isdigit() else value
-
-    # Convert input to DataFrame and preprocess
-    input_df = pd.DataFrame([user_input])
-    try:
-        X_processed, _ = preprocess_data(input_df)  # Process single input
-        prediction = model.predict(X_processed)
-        print("\nPrediction: ", "Customer will churn" if prediction[0] == 1 else "Customer will not churn")
-    except Exception as e:
-        print(f"Error during prediction: {e}")
-    
-    main_menu()
-
-if __name__ == '__main__':
-    main_menu()
+    # Evaluate model
+    y_pred = rf_model.predict(X_test)
+    y_pred_proba = rf_model.predict_proba(X_test)[:, 1]
+    metrics = evaluate_model(y_test, y_pred, y_pred_proba)
+    print("Evaluation Metrics:")
+    for key, value in metrics.items():
+        print(f"{key}: {value:.2f}")
 
